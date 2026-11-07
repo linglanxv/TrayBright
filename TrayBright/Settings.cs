@@ -18,8 +18,8 @@ public class AppSettings
     /// <summary>调节时的平滑过渡时长（毫秒），0 表示立即生效</summary>
     public int FadeMilliseconds { get; set; } = 250;
 
-    /// <summary>记忆的强度（0-100）：0 色温最强（1700K 最暖），100 关闭（6500K 原色）</summary>
-    public int Strength { get; set; } = 100;
+    /// <summary>记忆的强度（0-100）：数字越大色温越强（100 = 1700K 最暖），0 关闭（6500K 原色）</summary>
+    public int Strength { get; set; } = 0;
 
     [JsonIgnore]
     private static readonly string Dir =
