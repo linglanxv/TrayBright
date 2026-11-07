@@ -5,6 +5,7 @@ namespace TrayBright;
 
 /// <summary>
 /// 应用主上下文：托盘图标、弹出面板、平滑过渡、记忆与开机恢复。
+/// 强度 0-100：数字越小色温越强（1700K 最暖），100 为关闭（6500K 原色）。
 /// </summary>
 public class TrayAppContext : ApplicationContext
 {
@@ -22,14 +23,18 @@ public class TrayAppContext : ApplicationContext
     private DateTime _lastHover = DateTime.MinValue;
 
     private PopupForm? _popup;
-    private int _currentTemp;   // 当前生效/目标色温
-    private int _fromTemp;      // 过渡起点
+    private ToolStripMenuItem _toggleItem = null!; // 右键菜单里的软件开关
+
+    private bool _enabled = true;    // 软件开关（临时停用不退出）
+    private int _currentStrength;    // 当前强度 0-100（记忆值）
+    private int _appliedStrength = 100; // 实际已应用到屏幕的强度（过渡起点）
     private DateTime _transStart;
 
     public TrayAppContext()
     {
         _settings = AppSettings.Load();
-        _currentTemp = Math.Clamp(_settings.TemperatureKelvin, ColorTemperature.MinKelvin, ColorTemperature.MaxKelvin);
+        _currentStrength = Math.Clamp(_settings.Strength, 0, 100);
+        _enabled = _currentStrength < 100; // 记忆为 100（关闭）时启动即为停用状态
 
         _tray = new NotifyIcon
         {
@@ -41,8 +46,14 @@ public class TrayAppContext : ApplicationContext
         _tray.MouseMove += TrayOnMouseMove; // 悬停记录位置，供滚轮钩子判断
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("色温调节面板", null, (_, _) => ShowPopup());
+        menu.Items.Add("调节面板", null, (_, _) => ShowPopup());
         menu.Items.Add(new ToolStripSeparator());
+
+        // 软件开关：临时开/关夜间模式，不退出程序
+        _toggleItem = new ToolStripMenuItem("启用夜间模式") { Checked = _enabled };
+        _toggleItem.Click += (_, _) => ToggleEnabled();
+        menu.Items.Add(_toggleItem);
+
         var autoStart = new ToolStripMenuItem("开机自动启动") { Checked = _settings.StartWithWindows };
         autoStart.Click += (_, _) =>
         {
@@ -53,7 +64,7 @@ public class TrayAppContext : ApplicationContext
         };
         menu.Items.Add(autoStart);
 
-        var restore = new ToolStripMenuItem("开机恢复上次色温") { Checked = _settings.RestoreOnStartup };
+        var restore = new ToolStripMenuItem("开机恢复上次强度") { Checked = _settings.RestoreOnStartup };
         restore.Click += (_, _) =>
         {
             _settings.RestoreOnStartup = !_settings.RestoreOnStartup;
@@ -61,10 +72,6 @@ public class TrayAppContext : ApplicationContext
             ScheduleSave();
         };
         menu.Items.Add(restore);
-
-        var offItem = new ToolStripMenuItem("关闭夜间模式（6500K）", null,
-            (_, _) => ApplyTemperature(ColorTemperature.MaxKelvin));
-        menu.Items.Add(offItem);
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitApp());
@@ -77,32 +84,61 @@ public class TrayAppContext : ApplicationContext
         _wheelTimer = new System.Windows.Forms.Timer { Interval = 30 }; // 滚轮调节去抖
         _wheelTimer.Tick += WheelTimerTick;
 
-        InstallWheelHook(); // 托盘图标上滚动滚轮调色温
+        InstallWheelHook(); // 托盘图标上滚动滚轮微调强度
 
         // 记忆功能：开机按上次位置恢复
-        if (_settings.RestoreOnStartup)
-            ApplyTemperature(_currentTemp);
+        if (_settings.RestoreOnStartup && _enabled)
+            ApplyStrength(_currentStrength);
         UpdateTrayText();
     }
 
-    private void UpdateTrayText() =>
-        _tray.Text = _currentTemp >= ColorTemperature.MaxKelvin
-            ? "TrayBright 夜间模式（未开启）"
-            : $"TrayBright 夜间模式（当前 {_currentTemp}K）";
+    /// <summary>强度转开尔文色温：0 → 1700K（最强），100 → 6500K（原色）</summary>
+    private static int KelvinFromStrength(int strength) =>
+        ColorTemperature.MinKelvin + strength * (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin) / 100;
 
-    private void ApplyTemperature(int kelvin)
+    /// <summary>软件开关：临时停用（恢复原色）或重新启用（恢复记忆强度），不退出程序</summary>
+    private void ToggleEnabled()
     {
-        kelvin = Math.Clamp(kelvin, ColorTemperature.MinKelvin, ColorTemperature.MaxKelvin);
-        _settings.TemperatureKelvin = kelvin; // 记忆
+        _enabled = !_enabled;
+        _toggleItem.Checked = _enabled;
+        if (_enabled)
+            ApplyStrength(_currentStrength);
+        else
+        {
+            _fadeTimer.Stop();
+            ColorTemperature.Reset();
+            _appliedStrength = 100;
+        }
+        UpdateTrayText();
+        ScheduleSave();
+    }
+
+    private void UpdateTrayText() =>
+        _tray.Text = !_enabled || _currentStrength >= 100
+            ? "TrayBright 夜间模式（已关闭）"
+            : $"TrayBright 夜间模式（强度 {_currentStrength}%）";
+
+    /// <summary>应用强度并记忆；滑块/滚轮调节会自动把开关置为启用</summary>
+    private void ApplyStrength(int strength)
+    {
+        strength = Math.Clamp(strength, 0, 100);
+        _settings.Strength = strength; // 记忆
+        _currentStrength = strength;
+
+        if (!_enabled) // 调节即视为重新启用
+        {
+            _enabled = true;
+            _toggleItem.Checked = true;
+        }
+
         if (_settings.FadeMilliseconds <= 0)
         {
-            _currentTemp = kelvin;
-            ColorTemperature.Apply(kelvin);
+            ColorTemperature.Apply(KelvinFromStrength(strength));
+            _appliedStrength = strength;
         }
         else
         {
-            _fromTemp = _currentTemp;
-            _currentTemp = kelvin;
+            _fromStrength = _appliedStrength;
             _transStart = DateTime.UtcNow;
             _fadeTimer.Start();
         }
@@ -113,14 +149,16 @@ public class TrayAppContext : ApplicationContext
     private void FadeTick(object? sender, EventArgs e)
     {
         double t = (DateTime.UtcNow - _transStart).TotalMilliseconds / Math.Max(1, _settings.FadeMilliseconds);
+        int target = _currentStrength;
         if (t >= 1)
         {
-            ColorTemperature.Apply(_currentTemp);
+            ColorTemperature.Apply(KelvinFromStrength(target));
+            _appliedStrength = target;
             _fadeTimer.Stop();
             return;
         }
-        int kelvin = (int)Math.Round(_fromTemp + (_currentTemp - _fromTemp) * t);
-        ColorTemperature.Apply(kelvin);
+        int s = (int)Math.Round(_fromStrength + (target - _fromStrength) * t);
+        ColorTemperature.Apply(KelvinFromStrength(s));
     }
 
     private void TrayOnMouseClick(object? sender, MouseEventArgs e)
@@ -156,7 +194,7 @@ public class TrayAppContext : ApplicationContext
             int dx = info.pt.x - _lastHoverPos.X, dy = info.pt.y - _lastHoverPos.Y;
             if (dx * dx + dy * dy <= 32 * 32) // 滚轮发生时鼠标基本未离开托盘图标
             {
-                _pendingWheelDelta = Math.Clamp(_pendingWheelDelta + Math.Sign((short)(info.mouseData >> 16)) * 100, -3000, 3000);
+                _pendingWheelDelta = Math.Clamp(_pendingWheelDelta + Math.Sign((short)(info.mouseData >> 16)) * 2, -200, 200);
                 _wheelTimer.Start();
                 return new IntPtr(1); // 吞掉滚轮事件，避免传给其他程序
             }
@@ -164,19 +202,19 @@ public class TrayAppContext : ApplicationContext
         return HookNative.CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
-    /// <summary>滚轮去抖应用：色温 ±100K/格 并自动记忆</summary>
+    /// <summary>滚轮去抖应用：强度 ±2/格 并自动记忆</summary>
     private void WheelTimerTick(object? sender, EventArgs e)
     {
         if (_pendingWheelDelta == 0) { _wheelTimer.Stop(); return; }
         int delta = _pendingWheelDelta;
         _pendingWheelDelta = 0;
-        ApplyTemperature(_currentTemp + delta);
+        ApplyStrength(_currentStrength + delta);
     }
 
     private void ShowPopup()
     {
         if (_popup != null) { _popup.Close(); return; }
-        _popup = new PopupForm(_currentTemp, ApplyTemperature, () => _popup = null);
+        _popup = new PopupForm(_currentStrength, ApplyStrength, () => _popup = null);
         _popup.Show();
         _popup.Activate();
     }
