@@ -28,6 +28,7 @@ public class TrayAppContext : ApplicationContext
             Visible = true
         };
         _tray.MouseClick += TrayOnMouseClick;
+        _tray.MouseWheel += TrayOnMouseWheel;
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("亮度调节面板", null, (_, _) => ShowPopup());
@@ -88,6 +89,21 @@ public class TrayAppContext : ApplicationContext
     {
         if (e.Button == MouseButtons.Left)
             ShowPopup();
+    }
+
+    /// <summary>鼠标悬停托盘图标上滚动滚轮：所有显示器整体 ±5%，并自动记忆</summary>
+    private void TrayOnMouseWheel(object? sender, MouseEventArgs e)
+    {
+        int delta = Math.Sign(e.Delta) * 5;
+        RefreshMonitors();
+        foreach (var m in _monitors)
+        {
+            int target = Math.Clamp((m.Current < 0 ? 50 : m.Current) + delta, 0, 100);
+            _settings.Remembered[m.Id] = target;
+            BeginTransition(m, target);
+        }
+        ScheduleSave();
+        _tray.Text = $"亮度 {(_monitors.Count > 0 ? _monitors[0].Current.ToString() : "--")}%";
     }
 
     private void ShowPopup()
