@@ -28,6 +28,7 @@ public class TrayAppContext : ApplicationContext
     private bool _enabled = true;    // 软件开关（临时停用不退出）
     private int _currentStrength;    // 当前强度 0-100（记忆值）
     private int _appliedStrength = 100; // 实际已应用到屏幕的强度（过渡起点）
+    private int _fromStrength;       // 本次过渡的起点（快照）
     private DateTime _transStart;
 
     public TrayAppContext()
