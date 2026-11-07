@@ -10,7 +10,7 @@ public class TrayAppContext : ApplicationContext
 {
     private readonly NotifyIcon _tray;
     private readonly AppSettings _settings;
-    private readonly System.Windows.Forms.Timer _fadeTimer;  // 亮度平滑过渡
+    private readonly System.Windows.Forms.Timer _fadeTimer;  // 色温平滑过渡
     private readonly System.Windows.Forms.Timer _saveTimer;  // 记忆防抖保存
     private readonly System.Windows.Forms.Timer _wheelTimer; // 滚轮调节去抖
     private int _pendingWheelDelta;                          // 待应用的滚轮变化量
@@ -20,27 +20,28 @@ public class TrayAppContext : ApplicationContext
     private HookNative.LowLevelMouseProc _hookProc = null!; // 持有委托引用，防止被 GC 回收导致钩子失效
     private Point _lastHoverPos;
     private DateTime _lastHover = DateTime.MinValue;
-    private PopupForm? _popup;
-    private List<MonitorInfo> _monitors = new();
 
-    // 过渡状态：显示器Id -> (起点, 终点, 起始时间)
-    private readonly Dictionary<string, (int From, int To, DateTime Start)> _transitions = new();
+    private PopupForm? _popup;
+    private int _currentTemp;   // 当前生效/目标色温
+    private int _fromTemp;      // 过渡起点
+    private DateTime _transStart;
 
     public TrayAppContext()
     {
         _settings = AppSettings.Load();
+        _currentTemp = Math.Clamp(_settings.TemperatureKelvin, ColorTemperature.MinKelvin, ColorTemperature.MaxKelvin);
 
         _tray = new NotifyIcon
         {
             Icon = MakeIcon(),
-            Text = "TrayBright 亮度调节",
+            Text = "TrayBright 夜间模式",
             Visible = true
         };
         _tray.MouseClick += TrayOnMouseClick;
         _tray.MouseMove += TrayOnMouseMove; // 悬停记录位置，供滚轮钩子判断
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("亮度调节面板", null, (_, _) => ShowPopup());
+        menu.Items.Add("色温调节面板", null, (_, _) => ShowPopup());
         menu.Items.Add(new ToolStripSeparator());
         var autoStart = new ToolStripMenuItem("开机自动启动") { Checked = _settings.StartWithWindows };
         autoStart.Click += (_, _) =>
@@ -52,7 +53,7 @@ public class TrayAppContext : ApplicationContext
         };
         menu.Items.Add(autoStart);
 
-        var restore = new ToolStripMenuItem("开机恢复上次亮度") { Checked = _settings.RestoreOnStartup };
+        var restore = new ToolStripMenuItem("开机恢复上次色温") { Checked = _settings.RestoreOnStartup };
         restore.Click += (_, _) =>
         {
             _settings.RestoreOnStartup = !_settings.RestoreOnStartup;
@@ -60,6 +61,10 @@ public class TrayAppContext : ApplicationContext
             ScheduleSave();
         };
         menu.Items.Add(restore);
+
+        var offItem = new ToolStripMenuItem("关闭夜间模式（6500K）", null,
+            (_, _) => ApplyTemperature(ColorTemperature.MaxKelvin));
+        menu.Items.Add(offItem);
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitApp());
@@ -72,29 +77,50 @@ public class TrayAppContext : ApplicationContext
         _wheelTimer = new System.Windows.Forms.Timer { Interval = 30 }; // 滚轮调节去抖
         _wheelTimer.Tick += WheelTimerTick;
 
-        InstallWheelHook(); // 托盘图标上滚动滚轮调亮度
-        RefreshMonitors();
+        InstallWheelHook(); // 托盘图标上滚动滚轮调色温
 
         // 记忆功能：开机按上次位置恢复
         if (_settings.RestoreOnStartup)
-            RestoreRemembered();
+            ApplyTemperature(_currentTemp);
+        UpdateTrayText();
     }
 
-    private void RefreshMonitors()
-    {
-        _monitors = MonitorManager.GetMonitors();
-        _tray.Text = _monitors.Count > 0
-            ? $"TrayBright 亮度调节（{_monitors.Count} 台显示器）"
-            : "TrayBright 亮度调节";
-    }
+    private void UpdateTrayText() =>
+        _tray.Text = _currentTemp >= ColorTemperature.MaxKelvin
+            ? "TrayBright 夜间模式（未开启）"
+            : $"TrayBright 夜间模式（当前 {_currentTemp}K）";
 
-    private void RestoreRemembered()
+    private void ApplyTemperature(int kelvin)
     {
-        foreach (var m in _monitors)
+        kelvin = Math.Clamp(kelvin, ColorTemperature.MinKelvin, ColorTemperature.MaxKelvin);
+        _settings.TemperatureKelvin = kelvin; // 记忆
+        if (_settings.FadeMilliseconds <= 0)
         {
-            if (_settings.Remembered.TryGetValue(m.Id, out int v) && v is >= 0 and <= 100)
-                BeginTransition(m, v);
+            _currentTemp = kelvin;
+            ColorTemperature.Apply(kelvin);
         }
+        else
+        {
+            _fromTemp = _currentTemp;
+            _currentTemp = kelvin;
+            _transStart = DateTime.UtcNow;
+            _fadeTimer.Start();
+        }
+        ScheduleSave(); // 防抖写盘
+        UpdateTrayText();
+    }
+
+    private void FadeTick(object? sender, EventArgs e)
+    {
+        double t = (DateTime.UtcNow - _transStart).TotalMilliseconds / Math.Max(1, _settings.FadeMilliseconds);
+        if (t >= 1)
+        {
+            ColorTemperature.Apply(_currentTemp);
+            _fadeTimer.Stop();
+            return;
+        }
+        int kelvin = (int)Math.Round(_fromTemp + (_currentTemp - _fromTemp) * t);
+        ColorTemperature.Apply(kelvin);
     }
 
     private void TrayOnMouseClick(object? sender, MouseEventArgs e)
@@ -126,11 +152,11 @@ public class TrayAppContext : ApplicationContext
         if (nCode >= 0 && wParam.ToInt32() == HookNative.WM_MOUSEWHEEL &&
             (DateTime.UtcNow - _lastHover).TotalMilliseconds < 500)
         {
-            var info = System.Runtime.InteropServices.Marshal.PtrToStructure<HookNative.MSLLHOOKSTRUCT>(lParam);
+            var info = Marshal.PtrToStructure<HookNative.MSLLHOOKSTRUCT>(lParam);
             int dx = info.pt.x - _lastHoverPos.X, dy = info.pt.y - _lastHoverPos.Y;
             if (dx * dx + dy * dy <= 32 * 32) // 滚轮发生时鼠标基本未离开托盘图标
             {
-                _pendingWheelDelta = Math.Clamp(_pendingWheelDelta + Math.Sign((short)(info.mouseData >> 16)) * 5, -100, 100);
+                _pendingWheelDelta = Math.Clamp(_pendingWheelDelta + Math.Sign((short)(info.mouseData >> 16)) * 100, -3000, 3000);
                 _wheelTimer.Start();
                 return new IntPtr(1); // 吞掉滚轮事件，避免传给其他程序
             }
@@ -138,72 +164,21 @@ public class TrayAppContext : ApplicationContext
         return HookNative.CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
-    /// <summary>滚轮去抖应用：所有显示器整体调亮/调暗并自动记忆</summary>
+    /// <summary>滚轮去抖应用：色温 ±100K/格 并自动记忆</summary>
     private void WheelTimerTick(object? sender, EventArgs e)
     {
         if (_pendingWheelDelta == 0) { _wheelTimer.Stop(); return; }
         int delta = _pendingWheelDelta;
         _pendingWheelDelta = 0;
-        RefreshMonitors();
-        foreach (var m in _monitors)
-        {
-            int target = Math.Clamp((m.Current < 0 ? 50 : m.Current) + delta, 0, 100);
-            _settings.Remembered[m.Id] = target;
-            BeginTransition(m, target);
-        }
-        ScheduleSave();
-        _tray.Text = $"亮度 {(_monitors.Count > 0 ? _monitors[0].Current.ToString() : "--")}%";
+        ApplyTemperature(_currentTemp + delta);
     }
 
     private void ShowPopup()
     {
         if (_popup != null) { _popup.Close(); return; }
-        RefreshMonitors();
-        _popup = new PopupForm(_monitors, _settings.Remembered, OnBrightnessChanged, () => _popup = null);
+        _popup = new PopupForm(_currentTemp, ApplyTemperature, () => _popup = null);
         _popup.Show();
         _popup.Activate();
-    }
-
-    private void OnBrightnessChanged(MonitorInfo m, int value)
-    {
-        _settings.Remembered[m.Id] = value; // 记忆
-        BeginTransition(m, value);
-        ScheduleSave();                     // 防抖写盘
-    }
-
-    private void BeginTransition(MonitorInfo m, int target)
-    {
-        if (_settings.FadeMilliseconds <= 0)
-        {
-            m.SetBrightness(target);
-            return;
-        }
-        int from = m.Current >= 0 ? m.Current : target;
-        _transitions[m.Id] = (from, target, DateTime.UtcNow);
-        if (!_fadeTimer.Enabled) _fadeTimer.Start();
-    }
-
-    private void FadeTick(object? sender, EventArgs e)
-    {
-        var byId = _monitors.ToDictionary(m => m.Id);
-        bool any = false;
-        foreach (var (id, (from, to, start)) in _transitions.ToList())
-        {
-            if (!byId.TryGetValue(id, out var m)) { _transitions.Remove(id); continue; }
-            double t = (DateTime.UtcNow - start).TotalMilliseconds / Math.Max(1, _settings.FadeMilliseconds);
-            if (t >= 1)
-            {
-                m.SetBrightness(to);
-                _transitions.Remove(id);
-            }
-            else
-            {
-                int value = (int)Math.Round(from + (to - from) * t);
-                m.SetBrightness(value);
-                any = true;
-            }
-        }
-        if (!any && _transitions.Count == 0) _fadeTimer.Stop();
     }
 
     private void ScheduleSave()
@@ -234,23 +209,24 @@ public class TrayAppContext : ApplicationContext
         _saveTimer?.Stop();
         _wheelTimer?.Stop();
         if (_hook != IntPtr.Zero) HookNative.UnhookWindowsHookEx(_hook);
+        ColorTemperature.Reset(); // 退出时恢复系统原色，避免残留暖色
         _tray.Visible = false;
         _tray.Dispose();
         Application.Exit();
     }
 
-    /// <summary>运行时绘制托盘图标（月亮+太阳意象，无需外部 ico 文件）</summary>
+    /// <summary>运行时绘制托盘图标（月亮意象，无需外部 ico 文件）</summary>
     private static Icon MakeIcon()
     {
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var bg = new SolidBrush(Color.FromArgb(255, 150, 80));
+            using var bg = new SolidBrush(Color.FromArgb(64, 72, 100));
             g.FillEllipse(bg, 2, 2, 28, 28);
             using var white = new SolidBrush(Color.White);
             g.FillEllipse(white, 8, 8, 16, 16);
-            using var cut = new SolidBrush(Color.FromArgb(255, 150, 80));
+            using var cut = new SolidBrush(Color.FromArgb(64, 72, 100));
             g.FillEllipse(cut, 13, 6, 16, 16); // 月牙效果
         }
         return Icon.FromHandle(bmp.GetHicon());
