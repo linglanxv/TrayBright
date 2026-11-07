@@ -3,13 +3,21 @@ using System.Drawing.Drawing2D;
 namespace TrayBright;
 
 /// <summary>
-/// 自绘平滑滑块（仿 Twinkle Tray 风格）：圆角轨道 + 渐变填充 + 圆形拖块。
+/// 自绘平滑滑块（仿 Twinkle Tray 风格）。
+/// 支持两种模式：填充模式（亮度类）与渐变模式（色温类：暖橙→冷白全轨道渐变，拖块标记当前位置）。
 /// </summary>
 public class SmoothSlider : Control
 {
     private float _value = 50f; // 0-100
     public bool Dragging { get; private set; }
     public string Label = "";
+
+    /// <summary>是否显示"已填充"进度（色温模式设为 false）</summary>
+    public bool ShowFill { get; set; } = true;
+
+    /// <summary>渐变模式轨道起点/终点颜色</summary>
+    public Color TrackStart { get; set; } = Color.FromArgb(255, 190, 90);
+    public Color TrackEnd { get; set; } = Color.FromArgb(255, 140, 70);
 
     public event Action<int>? ValueCommitted; // 拖动过程中持续触发
 
@@ -42,13 +50,23 @@ public class SmoothSlider : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         var track = TrackRect;
-        using (var bg = new SolidBrush(Color.FromArgb(70, 70, 80)))
-            g.FillPath(bg, RoundedRect(track, 4f));
+        if (ShowFill)
+        {
+            using (var bg = new SolidBrush(Color.FromArgb(70, 70, 80)))
+                g.FillPath(bg, RoundedRect(track, 4f));
 
-        float fillW = Math.Max(track.Height, track.Width * _value / 100f);
-        var fillRect = new RectangleF(track.X, track.Y, fillW, track.Height);
-        using (var grad = new LinearGradientBrush(fillRect, Color.FromArgb(255, 190, 90), Color.FromArgb(255, 140, 70), 0f))
-            g.FillPath(grad, RoundedRect(fillRect, 4f));
+            float fillW = Math.Max(track.Height, track.Width * _value / 100f);
+            var fillRect = new RectangleF(track.X, track.Y, fillW, track.Height);
+            using (var grad = new LinearGradientBrush(fillRect, TrackStart, TrackEnd, 0f))
+                g.FillPath(grad, RoundedRect(fillRect, 4f));
+        }
+        else
+        {
+            using (var bg = new SolidBrush(Color.FromArgb(70, 70, 80)))
+                g.FillPath(bg, RoundedRect(track, 4f));
+            using (var grad = new LinearGradientBrush(track, TrackStart, TrackEnd, 0f))
+                g.FillPath(grad, RoundedRect(track, 4f));
+        }
 
         // 拖块
         float cx = track.X + track.Width * _value / 100f;
@@ -58,7 +76,7 @@ public class SmoothSlider : Control
         using (var white = new SolidBrush(Dragging ? Color.FromArgb(255, 245, 230) : Color.White))
             g.FillEllipse(white, thumb);
 
-        // 百分比文字
+        // 百分比/色温文字
         string text = Label;
         if (text.Length > 0)
         {
