@@ -1,20 +1,21 @@
 namespace TrayBright;
 
 /// <summary>
-/// 托盘弹出的色温面板（无边框、深色圆角，仿 Twinkle Tray），点击外部自动关闭。
+/// 托盘弹出的强度面板（无边框、深色圆角，仿 Twinkle Tray），点击外部自动关闭。
+/// 强度 0-100：数字越小色温越强（越暖），100 为关闭（原色）。
 /// </summary>
 public class PopupForm : Form
 {
-    private readonly int _currentKelvin;
-    private readonly Action<int> _onTempChanged;
+    private readonly int _currentStrength;
+    private readonly Action<int> _onStrengthChanged;
     private readonly Action _onClose;
 
     private SmoothSlider _slider = null!;
 
-    public PopupForm(int currentKelvin, Action<int> onTempChanged, Action onClose)
+    public PopupForm(int currentStrength, Action<int> onStrengthChanged, Action onClose)
     {
-        _currentKelvin = Math.Clamp(currentKelvin, ColorTemperature.MinKelvin, ColorTemperature.MaxKelvin);
-        _onTempChanged = onTempChanged;
+        _currentStrength = Math.Clamp(currentStrength, 0, 100);
+        _onStrengthChanged = onStrengthChanged;
         _onClose = onClose;
 
         FormBorderStyle = FormBorderStyle.None;
@@ -27,12 +28,6 @@ public class PopupForm : Form
         BuildUi();
         PositionNearTray();
     }
-
-    private static int KelvinFromValue(float v) =>
-        ColorTemperature.MinKelvin + (int)Math.Round(v / 100f * (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin));
-
-    private static float ValueFromKelvin(int kelvin) =>
-        (kelvin - ColorTemperature.MinKelvin) * 100f / (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin);
 
     private void BuildUi()
     {
@@ -48,7 +43,7 @@ public class PopupForm : Form
 
         root.Controls.Add(new Label
         {
-            Text = "夜间模式 · 色温调节",
+            Text = "夜间模式 · 强度调节",
             ForeColor = Color.FromArgb(235, 235, 240),
             Font = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Bold),
             AutoSize = true,
@@ -60,18 +55,17 @@ public class PopupForm : Form
             Width = 330,
             Height = 36,
             ShowFill = false,
-            TrackStart = Color.FromArgb(255, 138, 60),  // 暖橙（低色温）
-            TrackEnd = Color.FromArgb(150, 185, 255),   // 冷蓝白（高色温）
-            Value = ValueFromKelvin(_currentKelvin),
-            Label = _currentKelvin + "K",
+            TrackStart = Color.FromArgb(255, 138, 60),  // 左端：0 最强（最暖）
+            TrackEnd = Color.FromArgb(228, 230, 236),   // 右端：100 关闭（原色）
+            Value = _currentStrength,
+            Label = _currentStrength + "%",
             Margin = new Padding(0, 2, 0, 2)
         };
         _slider.ValueCommitted += v =>
         {
-            int kelvin = KelvinFromValue(v);
-            _slider.Label = kelvin + "K";
+            _slider.Label = v + "%";
             _slider.Invalidate();
-            _onTempChanged(kelvin);
+            _onStrengthChanged(v);
         };
         root.Controls.Add(_slider);
 
@@ -83,7 +77,7 @@ public class PopupForm : Form
             Margin = new Padding(0, 4, 0, 0),
             BackColor = Color.FromArgb(39, 39, 46)
         };
-        foreach (var (name, kelvin) in new[] { ("烛光 1900K", 1900), ("日落 3400K", 3400), ("舒适 4500K", 4500), ("日光 6500K", 6500) })
+        foreach (var (name, strength) in new[] { ("烛光 4%", 4), ("日落 35%", 35), ("舒适 58%", 58), ("关闭 100%", 100) })
         {
             var btn = new Button
             {
@@ -97,13 +91,13 @@ public class PopupForm : Form
                 Cursor = Cursors.Hand
             };
             btn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 82);
-            int k = kelvin;
+            int s = strength;
             btn.Click += (_, _) =>
             {
-                _slider.Value = ValueFromKelvin(k);
-                _slider.Label = k + "K";
+                _slider.Value = s;
+                _slider.Label = s + "%";
                 _slider.Invalidate();
-                _onTempChanged(k);
+                _onStrengthChanged(s);
             };
             presets.Controls.Add(btn);
         }
@@ -111,7 +105,7 @@ public class PopupForm : Form
 
         root.Controls.Add(new Label
         {
-            Text = "拖动滑块或滚轮微调 · 自动记忆，下次开机恢复",
+            Text = "0 = 色温最强（最暖），100 = 关闭 · 自动记忆",
             ForeColor = Color.FromArgb(130, 130, 145),
             Font = new Font("Microsoft YaHei UI", 8f),
             AutoSize = true,
