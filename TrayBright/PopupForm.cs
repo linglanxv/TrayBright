@@ -2,7 +2,7 @@ namespace TrayBright;
 
 /// <summary>
 /// 托盘弹出的强度面板（无边框、深色圆角，仿 Twinkle Tray），点击外部自动关闭。
-/// 强度 0-100：数字越小色温越强（越暖），100 为关闭（原色）。
+/// 强度 0-100：数字越大色温越强（越暖），0 为关闭（原色）。
 /// </summary>
 public class PopupForm : Form
 {
@@ -55,8 +55,8 @@ public class PopupForm : Form
             Width = 330,
             Height = 36,
             ShowFill = false,
-            TrackStart = Color.FromArgb(255, 138, 60),  // 左端：0 最强（最暖）
-            TrackEnd = Color.FromArgb(228, 230, 236),   // 右端：100 关闭（原色）
+            TrackStart = Color.FromArgb(228, 230, 236), // 左端：0 关闭（原色）
+            TrackEnd = Color.FromArgb(255, 138, 60),    // 右端：100 最强（最暖）
             Value = _currentStrength,
             Label = _currentStrength + "%",
             Margin = new Padding(0, 2, 0, 2)
@@ -77,7 +77,7 @@ public class PopupForm : Form
             Margin = new Padding(0, 4, 0, 0),
             BackColor = Color.FromArgb(39, 39, 46)
         };
-        foreach (var (name, strength) in new[] { ("烛光 4%", 4), ("日落 35%", 35), ("舒适 58%", 58), ("关闭 100%", 100) })
+        foreach (var (name, strength) in new[] { ("关闭 0%", 0), ("舒适 42%", 42), ("日落 65%", 65), ("烛光 96%", 96) })
         {
             var btn = new Button
             {
@@ -105,7 +105,7 @@ public class PopupForm : Form
 
         root.Controls.Add(new Label
         {
-            Text = "0 = 色温最强（最暖），100 = 关闭 · 自动记忆",
+            Text = "100 = 色温最强（最暖），0 = 关闭 · 自动记忆",
             ForeColor = Color.FromArgb(130, 130, 145),
             Font = new Font("Microsoft YaHei UI", 8f),
             AutoSize = true,
