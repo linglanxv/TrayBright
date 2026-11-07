@@ -9,8 +9,16 @@ public class TrayAppContext : ApplicationContext
 {
     private readonly NotifyIcon _tray;
     private readonly AppSettings _settings;
-    private readonly System.Windows.Forms.Timer _fadeTimer; // 亮度平滑过渡
-    private readonly System.Windows.Forms.Timer _saveTimer; // 记忆防抖保存
+    private readonly System.Windows.Forms.Timer _fadeTimer;  // 亮度平滑过渡
+    private readonly System.Windows.Forms.Timer _saveTimer;  // 记忆防抖保存
+    private readonly System.Windows.Forms.Timer _wheelTimer; // 滚轮调节去抖
+    private int _pendingWheelDelta;                          // 待应用的滚轮变化量
+
+    // 低级鼠标钩子：捕获托盘图标上的滚轮
+    private IntPtr _hook = IntPtr.Zero;
+    private HookNative.LowLevelMouseProc _hookProc = null!; // 持有委托引用，防止被 GC 回收导致钩子失效
+    private Point _lastHoverPos;
+    private DateTime _lastHover = DateTime.MinValue;
     private PopupForm? _popup;
     private List<MonitorInfo> _monitors = new();
 
@@ -28,7 +36,7 @@ public class TrayAppContext : ApplicationContext
             Visible = true
         };
         _tray.MouseClick += TrayOnMouseClick;
-        _tray.MouseWheel += TrayOnMouseWheel;
+        _tray.MouseMove += TrayOnMouseMove; // 悬停记录位置，供滚轮钩子判断
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("亮度调节面板", null, (_, _) => ShowPopup());
@@ -60,7 +68,10 @@ public class TrayAppContext : ApplicationContext
         _fadeTimer.Tick += FadeTick;
         _saveTimer = new System.Windows.Forms.Timer { Interval = 600 };
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); _settings.Save(); };
+        _wheelTimer = new System.Windows.Forms.Timer { Interval = 30 }; // 滚轮调节去抖
+        _wheelTimer.Tick += WheelTimerTick;
 
+        InstallWheelHook(); // 托盘图标上滚动滚轮调亮度
         RefreshMonitors();
 
         // 记忆功能：开机按上次位置恢复
@@ -91,10 +102,47 @@ public class TrayAppContext : ApplicationContext
             ShowPopup();
     }
 
-    /// <summary>鼠标悬停托盘图标上滚动滚轮：所有显示器整体 ±5%，并自动记忆</summary>
-    private void TrayOnMouseWheel(object? sender, MouseEventArgs e)
+    /// <summary>记录鼠标悬停在托盘图标上的位置与时间（滚轮钩子的判断依据）</summary>
+    private void TrayOnMouseMove(object? sender, MouseEventArgs e)
     {
-        int delta = Math.Sign(e.Delta) * 5;
+        _lastHoverPos = Cursor.Position;
+        _lastHover = DateTime.UtcNow;
+    }
+
+    private void InstallWheelHook()
+    {
+        try
+        {
+            _hookProc = HookProc;
+            _hook = HookNative.SetWindowsHookEx(HookNative.WH_MOUSE_LL,
+                _hookProc, HookNative.GetModuleHandle(null), 0);
+        }
+        catch { _hook = IntPtr.Zero; }
+    }
+
+    private IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && wParam.ToInt32() == HookNative.WM_MOUSEWHEEL &&
+            (DateTime.UtcNow - _lastHover).TotalMilliseconds < 500)
+        {
+            var info = System.Runtime.InteropServices.Marshal.PtrToStructure<HookNative.MSLLHOOKSTRUCT>(lParam);
+            int dx = info.pt.x - _lastHoverPos.X, dy = info.pt.y - _lastHoverPos.Y;
+            if (dx * dx + dy * dy <= 32 * 32) // 滚轮发生时鼠标基本未离开托盘图标
+            {
+                _pendingWheelDelta = Math.Clamp(_pendingWheelDelta + Math.Sign((short)(info.mouseData >> 16)) * 5, -100, 100);
+                _wheelTimer.Start();
+                return new IntPtr(1); // 吞掉滚轮事件，避免传给其他程序
+            }
+        }
+        return HookNative.CallNextHookEx(_hook, nCode, wParam, lParam);
+    }
+
+    /// <summary>滚轮去抖应用：所有显示器整体调亮/调暗并自动记忆</summary>
+    private void WheelTimerTick(object? sender, EventArgs e)
+    {
+        if (_pendingWheelDelta == 0) { _wheelTimer.Stop(); return; }
+        int delta = _pendingWheelDelta;
+        _pendingWheelDelta = 0;
         RefreshMonitors();
         foreach (var m in _monitors)
         {
@@ -183,6 +231,8 @@ public class TrayAppContext : ApplicationContext
         _settings.Save();
         _fadeTimer?.Stop();
         _saveTimer?.Stop();
+        _wheelTimer?.Stop();
+        if (_hook != IntPtr.Zero) HookNative.UnhookWindowsHookEx(_hook);
         _tray.Visible = false;
         _tray.Dispose();
         Application.Exit();
@@ -204,4 +254,37 @@ public class TrayAppContext : ApplicationContext
         }
         return Icon.FromHandle(bmp.GetHicon());
     }
+}
+
+internal static class HookNative
+{
+    public const int WH_MOUSE_LL = 14;
+    public const int WM_MOUSEWHEEL = 0x020A;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int x, y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MSLLHOOKSTRUCT
+    {
+        public POINT pt;
+        public uint mouseData;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr GetModuleHandle(string? lpModuleName);
 }
