@@ -4,12 +4,12 @@ using System.Text.Json.Serialization;
 namespace TrayBright;
 
 /// <summary>
-/// 持久化设置（记忆功能核心）：保存每台显示器最后的亮度，下次开机自动恢复。
+/// 持久化设置（记忆功能核心）：保存最后使用的色温，下次开机自动恢复。
 /// 文件位置：%AppData%\TrayBright\settings.json
 /// </summary>
 public class AppSettings
 {
-    /// <summary>开机时自动恢复上次亮度</summary>
+    /// <summary>开机时自动恢复上次色温</summary>
     public bool RestoreOnStartup { get; set; } = true;
 
     /// <summary>跟随系统开机自启</summary>
@@ -18,8 +18,8 @@ public class AppSettings
     /// <summary>调节时的平滑过渡时长（毫秒），0 表示立即生效</summary>
     public int FadeMilliseconds { get; set; } = 250;
 
-    /// <summary>每台显示器记忆的亮度（0-100），键为显示器标识</summary>
-    public Dictionary<string, int> Remembered { get; set; } = new();
+    /// <summary>记忆的色温（开尔文，1700-6500），6500 为不偏色</summary>
+    public int TemperatureKelvin { get; set; } = ColorTemperature.MaxKelvin;
 
     [JsonIgnore]
     private static readonly string Dir =
