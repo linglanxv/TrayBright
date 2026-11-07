@@ -1,19 +1,20 @@
 namespace TrayBright;
 
 /// <summary>
-/// 托盘弹出的亮度面板（无边框、深色圆角，仿 Twinkle Tray），点击外部自动关闭。
+/// 托盘弹出的色温面板（无边框、深色圆角，仿 Twinkle Tray），点击外部自动关闭。
 /// </summary>
 public class PopupForm : Form
 {
-    private readonly List<MonitorInfo> _monitors;
-    private readonly Action<MonitorInfo, int> _onBrightnessChanged;
+    private readonly int _currentKelvin;
+    private readonly Action<int> _onTempChanged;
     private readonly Action _onClose;
 
-    public PopupForm(List<MonitorInfo> monitors, Dictionary<string, int> remembered,
-        Action<MonitorInfo, int> onBrightnessChanged, Action onClose)
+    private SmoothSlider _slider = null!;
+
+    public PopupForm(int currentKelvin, Action<int> onTempChanged, Action onClose)
     {
-        _monitors = monitors;
-        _onBrightnessChanged = onBrightnessChanged;
+        _currentKelvin = Math.Clamp(currentKelvin, ColorTemperature.MinKelvin, ColorTemperature.MaxKelvin);
+        _onTempChanged = onTempChanged;
         _onClose = onClose;
 
         FormBorderStyle = FormBorderStyle.None;
@@ -22,13 +23,18 @@ public class PopupForm : Form
         TopMost = true;
         BackColor = Color.FromArgb(39, 39, 46);
         DoubleBuffered = true;
-        MinimumSize = new Size(320, 60);
 
-        BuildUi(remembered);
+        BuildUi();
         PositionNearTray();
     }
 
-    private void BuildUi(Dictionary<string, int> remembered)
+    private static int KelvinFromValue(float v) =>
+        ColorTemperature.MinKelvin + (int)Math.Round(v / 100f * (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin));
+
+    private static float ValueFromKelvin(int kelvin) =>
+        (kelvin - ColorTemperature.MinKelvin) * 100f / (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin);
+
+    private void BuildUi()
     {
         var root = new FlowLayoutPanel
         {
@@ -40,77 +46,77 @@ public class PopupForm : Form
             BackColor = Color.FromArgb(39, 39, 46)
         };
 
-        var title = new Label
+        root.Controls.Add(new Label
         {
-            Text = "亮度调节",
+            Text = "夜间模式 · 色温调节",
             ForeColor = Color.FromArgb(235, 235, 240),
             Font = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Bold),
             AutoSize = true,
             Margin = new Padding(2, 0, 0, 6)
+        });
+
+        _slider = new SmoothSlider
+        {
+            Width = 330,
+            Height = 36,
+            ShowFill = false,
+            TrackStart = Color.FromArgb(255, 138, 60),  // 暖橙（低色温）
+            TrackEnd = Color.FromArgb(150, 185, 255),   // 冷蓝白（高色温）
+            Value = ValueFromKelvin(_currentKelvin),
+            Label = _currentKelvin + "K",
+            Margin = new Padding(0, 2, 0, 2)
         };
-        root.Controls.Add(title);
-
-        if (_monitors.Count == 0)
+        _slider.ValueCommitted += v =>
         {
-            root.Controls.Add(new Label
+            int kelvin = KelvinFromValue(v);
+            _slider.Label = kelvin + "K";
+            _slider.Invalidate();
+            _onTempChanged(kelvin);
+        };
+        root.Controls.Add(_slider);
+
+        // 预设按钮行
+        var presets = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = false,
+            Margin = new Padding(0, 4, 0, 0),
+            BackColor = Color.FromArgb(39, 39, 46)
+        };
+        foreach (var (name, kelvin) in new[] { ("烛光 1900K", 1900), ("日落 3400K", 3400), ("舒适 4500K", 4500), ("日光 6500K", 6500) })
+        {
+            var btn = new Button
             {
-                Text = "未检测到可调亮度的显示器",
-                ForeColor = Color.FromArgb(200, 120, 120),
+                Text = name,
                 AutoSize = true,
-                Margin = new Padding(2, 6, 0, 6)
-            });
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.FromArgb(220, 220, 228),
+                BackColor = Color.FromArgb(52, 52, 62),
+                Font = new Font("Microsoft YaHei UI", 8.5f),
+                Margin = new Padding(2, 0, 2, 0),
+                Cursor = Cursors.Hand
+            };
+            btn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 82);
+            int k = kelvin;
+            btn.Click += (_, _) =>
+            {
+                _slider.Value = ValueFromKelvin(k);
+                _slider.Label = k + "K";
+                _slider.Invalidate();
+                _onTempChanged(k);
+            };
+            presets.Controls.Add(btn);
         }
+        root.Controls.Add(presets);
 
-        int index = 0;
-        foreach (var m in _monitors)
+        root.Controls.Add(new Label
         {
-            var row = new Panel { Width = 330, Height = 40, Margin = new Padding(0, 2, 0, 2), BackColor = Color.FromArgb(39, 39, 46) };
-
-            var icon = new Label
-            {
-                Text = "☀",
-                ForeColor = Color.FromArgb(255, 190, 90),
-                Font = new Font("Segoe UI Symbol", 11f),
-                AutoSize = false,
-                Size = new Size(24, 34),
-                Location = new Point(0, 3),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            row.Controls.Add(icon);
-
-            int start = m.Current >= 0
-                ? m.Current
-                : remembered.TryGetValue(m.Id, out int r) ? r : 70;
-
-            var slider = new SmoothSlider
-            {
-                Location = new Point(26, 3),
-                Size = new Size(250, 34),
-                Value = start,
-                Label = start + "%",
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
-            };
-            slider.ValueCommitted += v =>
-            {
-                slider.Label = v + "%";
-                slider.Invalidate();
-                _onBrightnessChanged(m, v);
-            };
-            row.Controls.Add(slider);
-
-            root.Controls.Add(row);
-            index++;
-        }
-
-        var hint = new Label
-        {
-            Text = "松开滑块即自动记忆，下次开机恢复",
+            Text = "拖动滑块或滚轮微调 · 自动记忆，下次开机恢复",
             ForeColor = Color.FromArgb(130, 130, 145),
             Font = new Font("Microsoft YaHei UI", 8f),
             AutoSize = true,
             Margin = new Padding(2, 4, 0, 0)
-        };
-        root.Controls.Add(hint);
+        });
 
         Controls.Add(root);
         ClientSize = new Size(358, root.PreferredSize.Height);
