@@ -5,7 +5,7 @@ namespace TrayBright;
 
 /// <summary>
 /// 应用主上下文：托盘图标、弹出面板、平滑过渡、记忆与开机恢复。
-/// 强度 0-100：数字越小色温越强（1700K 最暖），100 为关闭（6500K 原色）。
+/// 强度 0-100：数字越大色温越强（100 = 1700K 最暖），0 为关闭（6500K 原色）。
 /// </summary>
 public class TrayAppContext : ApplicationContext
 {
@@ -26,8 +26,8 @@ public class TrayAppContext : ApplicationContext
     private ToolStripMenuItem _toggleItem = null!; // 右键菜单里的软件开关
 
     private bool _enabled = true;    // 软件开关（临时停用不退出）
-    private int _currentStrength;    // 当前强度 0-100（记忆值）
-    private int _appliedStrength = 100; // 实际已应用到屏幕的强度（过渡起点）
+    private int _currentStrength;    // 当前强度 0-100（记忆值），0 表示关闭
+    private int _appliedStrength;    // 实际已应用到屏幕的强度（过渡起点），0 表示原色
     private int _fromStrength;       // 本次过渡的起点（快照）
     private DateTime _transStart;
 
@@ -35,7 +35,7 @@ public class TrayAppContext : ApplicationContext
     {
         _settings = AppSettings.Load();
         _currentStrength = Math.Clamp(_settings.Strength, 0, 100);
-        _enabled = _currentStrength < 100; // 记忆为 100（关闭）时启动即为停用状态
+        _enabled = _currentStrength > 0; // 记忆为 0（关闭）时启动即为停用状态
 
         _tray = new NotifyIcon
         {
@@ -93,9 +93,9 @@ public class TrayAppContext : ApplicationContext
         UpdateTrayText();
     }
 
-    /// <summary>强度转开尔文色温：0 → 1700K（最强），100 → 6500K（原色）</summary>
+    /// <summary>强度转开尔文色温：100 → 1700K（最强），0 → 6500K（原色）</summary>
     private static int KelvinFromStrength(int strength) =>
-        ColorTemperature.MinKelvin + strength * (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin) / 100;
+        ColorTemperature.MaxKelvin - strength * (ColorTemperature.MaxKelvin - ColorTemperature.MinKelvin) / 100;
 
     /// <summary>软件开关：临时停用（恢复原色）或重新启用（恢复记忆强度），不退出程序</summary>
     private void ToggleEnabled()
@@ -103,19 +103,19 @@ public class TrayAppContext : ApplicationContext
         _enabled = !_enabled;
         _toggleItem.Checked = _enabled;
         if (_enabled)
-            ApplyStrength(_currentStrength);
+            ApplyStrength(_currentStrength > 0 ? _currentStrength : 42); // 无记忆时默认“舒适”
         else
         {
             _fadeTimer.Stop();
             ColorTemperature.Reset();
-            _appliedStrength = 100;
+            _appliedStrength = 0;
         }
         UpdateTrayText();
         ScheduleSave();
     }
 
     private void UpdateTrayText() =>
-        _tray.Text = !_enabled || _currentStrength >= 100
+        _tray.Text = !_enabled || _currentStrength <= 0
             ? "TrayBright 夜间模式（已关闭）"
             : $"TrayBright 夜间模式（强度 {_currentStrength}%）";
 
