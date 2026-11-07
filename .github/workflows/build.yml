@@ -3,9 +3,8 @@ name: Build TrayBright
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   workflow_dispatch:
-  release:
-    types: [ created ]
 
 jobs:
   build:
@@ -32,8 +31,9 @@ jobs:
           name: TrayBright-win-x64
           path: TrayBright.exe
 
-      - name: 附加到 Release（打 tag 或创建 Release 时）
-        if: github.event_name == 'release'
+      - name: 发布到 Releases（推送 v* 标签时自动创建 Release 并附加 exe）
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: TrayBright.exe
+          generate_release_notes: true
