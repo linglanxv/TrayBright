@@ -42,7 +42,7 @@ public static class ColorTemperature
             if (hdc == IntPtr.Zero) continue;
             try
             {
-                var ramp = new GdiNative.RAMP();
+                var ramp = NewRamp();
                 for (int i = 0; i < 256; i++)
                 {
                     ushort v = (ushort)(i * 256);
@@ -83,9 +83,17 @@ public static class ColorTemperature
         };
     }
 
+    /// <summary>创建并初始化数组字段的 RAMP（结构体 new 后数组字段为 null，必须手动分配）</summary>
+    private static GdiNative.RAMP NewRamp() => new()
+    {
+        Red = new ushort[256],
+        Green = new ushort[256],
+        Blue = new ushort[256]
+    };
+
     private static GdiNative.RAMP BuildRamp(float[] gains)
     {
-        var ramp = new GdiNative.RAMP();
+        var ramp = NewRamp();
         for (int i = 0; i < 256; i++)
         {
             ramp.Red[i] = (ushort)Math.Clamp(i * 256 * gains[0], 0, 65535);
