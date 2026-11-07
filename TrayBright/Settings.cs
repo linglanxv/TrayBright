@@ -4,12 +4,12 @@ using System.Text.Json.Serialization;
 namespace TrayBright;
 
 /// <summary>
-/// 持久化设置（记忆功能核心）：保存最后使用的色温，下次开机自动恢复。
+/// 持久化设置（记忆功能核心）：保存最后的强度值，下次开机自动恢复。
 /// 文件位置：%AppData%\TrayBright\settings.json
 /// </summary>
 public class AppSettings
 {
-    /// <summary>开机时自动恢复上次色温</summary>
+    /// <summary>开机时自动恢复上次强度</summary>
     public bool RestoreOnStartup { get; set; } = true;
 
     /// <summary>跟随系统开机自启</summary>
@@ -18,8 +18,8 @@ public class AppSettings
     /// <summary>调节时的平滑过渡时长（毫秒），0 表示立即生效</summary>
     public int FadeMilliseconds { get; set; } = 250;
 
-    /// <summary>记忆的色温（开尔文，1700-6500），6500 为不偏色</summary>
-    public int TemperatureKelvin { get; set; } = ColorTemperature.MaxKelvin;
+    /// <summary>记忆的强度（0-100）：0 色温最强（1700K 最暖），100 关闭（6500K 原色）</summary>
+    public int Strength { get; set; } = 100;
 
     [JsonIgnore]
     private static readonly string Dir =
